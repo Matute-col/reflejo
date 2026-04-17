@@ -17,6 +17,20 @@ type QuestionScreenProps = {
   totalQuestions: number;
 };
 
+type SpeechRecognitionEventLike = {
+  results?: {
+    [key: number]: {
+      [key: number]: {
+        transcript?: string;
+      };
+    };
+  };
+};
+
+type SpeechRecognitionErrorEventLike = {
+  error?: string;
+};
+
 const containerVariants = {
   hidden: {},
   show: {
@@ -59,7 +73,7 @@ export default function QuestionScreen({
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
 
-  const startListening = async () => {
+  const startListening = () => {
     if (typeof window === "undefined") return;
 
     setVoiceError(null);
@@ -69,21 +83,8 @@ export default function QuestionScreen({
       (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setVoiceError("Tu navegador no soporta reconocimiento de voz.");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-    } catch (error) {
-      console.error("No se pudo acceder al micrófono:", error);
-
-      const simulatedText = "Veo una figura parecida a un murciélago";
-      onAnswerChange(simulatedText);
-
       setVoiceError(
-        "No se pudo abrir el micrófono. Se cargó una transcripción simulada para continuar probando el flujo."
+        "Tu navegador no soporta reconocimiento de voz. Prueba escribiendo manualmente o usando Chrome en Android."
       );
       return;
     }
@@ -94,37 +95,56 @@ export default function QuestionScreen({
       recognition.lang = "es-ES";
       recognition.interimResults = false;
       recognition.continuous = false;
+      recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
         setIsListening(true);
+        setVoiceError(null);
+        console.log("🎤 Reconocimiento iniciado");
       };
 
       recognition.onend = () => {
         setIsListening(false);
+        console.log("🛑 Reconocimiento finalizado");
       };
 
-      recognition.onerror = (event: any) => {
-        console.error("Error de voz:", event?.error);
+      recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
+        console.error("❌ Error de voz:", event?.error);
 
         if (event?.error === "not-allowed") {
-          setVoiceError("Debes permitir el acceso al micrófono para usar la voz.");
+          setVoiceError(
+            "Debes permitir el acceso al micrófono para usar el reconocimiento de voz."
+          );
         } else if (event?.error === "no-speech") {
           setVoiceError(
-            "No detecté voz. Intenta hablar un poco más cerca del micrófono."
+            "No detecté voz. Intenta hablar más cerca del micrófono."
           );
         } else if (event?.error === "audio-capture") {
-          setVoiceError("No se detectó un dispositivo de audio disponible.");
+          setVoiceError(
+            "No se detectó un dispositivo de audio disponible."
+          );
+        } else if (event?.error === "network") {
+          setVoiceError(
+            "Hubo un problema de red durante el reconocimiento."
+          );
         } else {
-          setVoiceError("Ocurrió un problema al intentar reconocer la voz.");
+          setVoiceError(
+            "Ocurrió un problema al intentar reconocer la voz."
+          );
         }
 
         setIsListening(false);
       };
 
-      recognition.onresult = (event: any) => {
+      recognition.onresult = (event: SpeechRecognitionEventLike) => {
         const transcript = event.results?.[0]?.[0]?.transcript?.trim() ?? "";
 
-        if (!transcript) return;
+        console.log("📝 Transcripción:", transcript);
+
+        if (!transcript) {
+          setVoiceError("No pude convertir tu voz en texto. Intenta de nuevo.");
+          return;
+        }
 
         setVoiceError(null);
         onAnswerChange(transcript);
@@ -133,10 +153,18 @@ export default function QuestionScreen({
       recognitionRef.current = recognition;
     }
 
+    if (isListening) {
+      return;
+    }
+
     try {
       recognitionRef.current.start();
     } catch (error) {
-      console.warn("Reconocimiento ya iniciado");
+      console.warn("⚠️ No se pudo iniciar el reconocimiento:", error);
+      setVoiceError(
+        "No se pudo iniciar el reconocimiento de voz. Intenta nuevamente."
+      );
+      setIsListening(false);
     }
   };
 
@@ -196,23 +224,23 @@ export default function QuestionScreen({
                     onChange={(e) => onAnswerChange(e.target.value)}
                     placeholder={question.placeholder}
                     className="
-  h-[80px] w-full
-  rounded-[18px]
-  border border-white/10
-  bg-[rgba(60,20,120,0.26)]
-  px-4 py-4 pr-16
-  text-[16px] text-white
-  placeholder:text-white/40
-  shadow-[0_8px_30px_rgba(124,92,255,0.10)]
-  outline-none
-  resize-none
-  backdrop-blur-[6px]
-  transition-all duration-300
-  hover:border-[#8c78ff]/40 hover:bg-[rgba(60,20,120,0.30)]
-  focus:border-[#a78bfa]/65
-  focus:bg-[rgba(60,20,120,0.34)]
-  focus:shadow-[0_12px_36px_rgba(124,92,255,0.18)]
-"
+                      h-[80px] w-full
+                      rounded-[18px]
+                      border border-white/10
+                      bg-[rgba(60,20,120,0.26)]
+                      px-4 py-4 pr-16
+                      text-[16px] text-white
+                      placeholder:text-white/40
+                      shadow-[0_8px_30px_rgba(124,92,255,0.10)]
+                      outline-none
+                      resize-none
+                      backdrop-blur-[6px]
+                      transition-all duration-300
+                      hover:border-[#8c78ff]/40 hover:bg-[rgba(60,20,120,0.30)]
+                      focus:border-[#a78bfa]/65
+                      focus:bg-[rgba(60,20,120,0.34)]
+                      focus:shadow-[0_12px_36px_rgba(124,92,255,0.18)]
+                    "
                   />
 
                   <button
@@ -220,14 +248,13 @@ export default function QuestionScreen({
                     aria-label="Activar micrófono"
                     onClick={startListening}
                     className={`
-                      absolute bottom-4 right-4
+                      absolute bottom-4 right-4 z-10
                       flex items-center justify-center
                       text-white transition-all duration-200
-                      ${
-                        isListening
-                          ? "scale-110 opacity-100"
-                          : "opacity-80 hover:opacity-100"
-                      }
+                      touch-manipulation
+                      ${isListening
+                        ? "scale-110 opacity-100"
+                        : "opacity-80 hover:opacity-100"}
                     `}
                   >
                     <Image
@@ -235,7 +262,8 @@ export default function QuestionScreen({
                       alt="Micrófono"
                       width={22}
                       height={22}
-                      className="invert"
+                      draggable={false}
+                      className="pointer-events-none select-none invert"
                     />
                   </button>
                 </div>
@@ -265,23 +293,23 @@ export default function QuestionScreen({
                   onChange={(e) => onAnswerChange(e.target.value)}
                   placeholder={question.placeholder}
                   className="
-  h-[150px] w-full
-  rounded-[18px]
-  border border-white/10
-  bg-[rgba(60,20,120,0.26)]
-  px-5 py-5 pr-20
-  text-[20px] text-white
-  placeholder:text-white/40
-  shadow-[0_10px_34px_rgba(124,92,255,0.10)]
-  outline-none
-  resize-none
-  backdrop-blur-[6px]
-  transition-all duration-300
-  hover:border-[#8c78ff]/40 hover:bg-[rgba(60,20,120,0.30)]
-  focus:border-[#a78bfa]/65
-  focus:bg-[rgba(60,20,120,0.34)]
-  focus:shadow-[0_14px_42px_rgba(124,92,255,0.18)]
-"
+                    h-[150px] w-full
+                    rounded-[18px]
+                    border border-white/10
+                    bg-[rgba(60,20,120,0.26)]
+                    px-5 py-5 pr-20
+                    text-[20px] text-white
+                    placeholder:text-white/40
+                    shadow-[0_10px_34px_rgba(124,92,255,0.10)]
+                    outline-none
+                    resize-none
+                    backdrop-blur-[6px]
+                    transition-all duration-300
+                    hover:border-[#8c78ff]/40 hover:bg-[rgba(60,20,120,0.30)]
+                    focus:border-[#a78bfa]/65
+                    focus:bg-[rgba(60,20,120,0.34)]
+                    focus:shadow-[0_14px_42px_rgba(124,92,255,0.18)]
+                  "
                 />
 
                 <button
@@ -289,14 +317,13 @@ export default function QuestionScreen({
                   aria-label="Activar micrófono"
                   onClick={startListening}
                   className={`
-                    absolute bottom-4 right-4
+                    absolute bottom-4 right-4 z-10
                     flex items-center justify-center
                     text-white transition-all duration-200
-                    ${
-                      isListening
-                        ? "scale-110 opacity-100"
-                        : "opacity-80 hover:opacity-100"
-                    }
+                    touch-manipulation
+                    ${isListening
+                      ? "scale-110 opacity-100"
+                      : "opacity-80 hover:opacity-100"}
                   `}
                 >
                   <Image
@@ -304,7 +331,8 @@ export default function QuestionScreen({
                     alt="Micrófono"
                     width={28}
                     height={28}
-                    className="invert"
+                    draggable={false}
+                    className="pointer-events-none select-none invert"
                   />
                 </button>
               </div>
