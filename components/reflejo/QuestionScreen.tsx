@@ -86,6 +86,10 @@ export default function QuestionScreen({
   const [isListening, setIsListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
 
+  const isListeningRef = useRef(false);
+  const latestAnswerRef = useRef(answer);
+  const latestOnAnswerChangeRef = useRef(onAnswerChange);
+
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const baseAnswerRef = useRef("");
@@ -98,11 +102,23 @@ export default function QuestionScreen({
     }
   };
 
+  useEffect(() => {
+    latestAnswerRef.current = answer;
+  }, [answer]);
+
+  useEffect(() => {
+    latestOnAnswerChangeRef.current = onAnswerChange;
+  }, [onAnswerChange]);
+
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
+
   const startSilenceTimer = () => {
     clearSilenceTimer();
 
     silenceTimerRef.current = setTimeout(() => {
-      if (recognitionRef.current && isListening) {
+      if (recognitionRef.current && isListeningRef.current) {
         recognitionRef.current.stop();
       }
     }, 3000);
@@ -115,7 +131,7 @@ export default function QuestionScreen({
       try {
         recognitionRef.current.stop();
       } catch {
-        // no hacemos nada si ya estaba detenido
+        // ya estaba detenido
       }
     }
   };
@@ -216,7 +232,7 @@ export default function QuestionScreen({
           interimTranscript,
         ]);
 
-        onAnswerChange(fullText);
+        latestOnAnswerChangeRef.current(fullText);
         setVoiceError(null);
         startSilenceTimer();
       };
@@ -224,9 +240,9 @@ export default function QuestionScreen({
       recognitionRef.current = recognition;
     }
 
-    if (isListening) return;
+    if (isListeningRef.current) return;
 
-    baseAnswerRef.current = answer.trim();
+    baseAnswerRef.current = latestAnswerRef.current.trim();
     finalTranscriptRef.current = "";
 
     try {
@@ -240,13 +256,30 @@ export default function QuestionScreen({
   };
 
   const handleMicClick = () => {
-    if (isListening) {
+    if (isListeningRef.current) {
       stopListening();
       return;
     }
 
     startListening();
   };
+
+  useEffect(() => {
+    clearSilenceTimer();
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // ignore
+      }
+    }
+
+    recognitionRef.current = null;
+    setIsListening(false);
+    isListeningRef.current = false;
+    finalTranscriptRef.current = "";
+  }, [question.id]);
 
   useEffect(() => {
     return () => {
