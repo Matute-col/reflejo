@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import ScreenLayout from "@/components/layout/ScreenLayout";
 import PrimaryButton from "@/components/ui/PrimaryButton";
 import Image from "next/image";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Question } from "@/types/test";
 
 type QuestionScreenProps = {
@@ -17,13 +17,18 @@ type QuestionScreenProps = {
   totalQuestions: number;
 };
 
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  0: {
+    transcript?: string;
+  };
+};
+
 type SpeechRecognitionEventLike = {
+  resultIndex?: number;
   results?: {
-    [key: number]: {
-      [key: number]: {
-        transcript?: string;
-      };
-    };
+    length: number;
+    [key: number]: SpeechRecognitionResultLike;
   };
 };
 
@@ -57,6 +62,15 @@ const itemVariants = {
   },
 };
 
+function mergeTextParts(parts: string[]) {
+  return parts
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export default function QuestionScreen({
   question,
   answer,
@@ -71,7 +85,40 @@ export default function QuestionScreen({
 
   const [isListening, setIsListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+
   const recognitionRef = useRef<any>(null);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const baseAnswerRef = useRef("");
+  const finalTranscriptRef = useRef("");
+
+  const clearSilenceTimer = () => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  };
+
+  const startSilenceTimer = () => {
+    clearSilenceTimer();
+
+    silenceTimerRef.current = setTimeout(() => {
+      if (recognitionRef.current && isListening) {
+        recognitionRef.current.stop();
+      }
+    }, 3000);
+  };
+
+  const stopListening = () => {
+    clearSilenceTimer();
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // no hacemos nada si ya estaba detenido
+      }
+    }
+  };
 
   const startListening = () => {
     if (typeof window === "undefined") return;
@@ -93,24 +140,22 @@ export default function QuestionScreen({
       const recognition = new SpeechRecognition();
 
       recognition.lang = "es-ES";
-      recognition.interimResults = false;
-      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.continuous = true;
       recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
         setIsListening(true);
         setVoiceError(null);
-        console.log("🎤 Reconocimiento iniciado");
+        startSilenceTimer();
       };
 
       recognition.onend = () => {
         setIsListening(false);
-        console.log("🛑 Reconocimiento finalizado");
+        clearSilenceTimer();
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
-        console.error("❌ Error de voz:", event?.error);
-
         if (event?.error === "not-allowed") {
           setVoiceError(
             "Debes permitir el acceso al micrófono para usar el reconocimiento de voz."
@@ -134,39 +179,88 @@ export default function QuestionScreen({
         }
 
         setIsListening(false);
+        clearSilenceTimer();
       };
 
       recognition.onresult = (event: SpeechRecognitionEventLike) => {
-        const transcript = event.results?.[0]?.[0]?.transcript?.trim() ?? "";
+        if (!event.results) return;
 
-        console.log("📝 Transcripción:", transcript);
+        let interimTranscript = "";
 
-        if (!transcript) {
-          setVoiceError("No pude convertir tu voz en texto. Intenta de nuevo.");
-          return;
+        for (
+          let i = event.resultIndex ?? 0;
+          i < event.results.length;
+          i += 1
+        ) {
+          const result = event.results[i];
+          const transcript = result?.[0]?.transcript?.trim() ?? "";
+
+          if (!transcript) continue;
+
+          if (result.isFinal) {
+            finalTranscriptRef.current = mergeTextParts([
+              finalTranscriptRef.current,
+              transcript,
+            ]);
+          } else {
+            interimTranscript = mergeTextParts([
+              interimTranscript,
+              transcript,
+            ]);
+          }
         }
 
+        const fullText = mergeTextParts([
+          baseAnswerRef.current,
+          finalTranscriptRef.current,
+          interimTranscript,
+        ]);
+
+        onAnswerChange(fullText);
         setVoiceError(null);
-        onAnswerChange(transcript);
+        startSilenceTimer();
       };
 
       recognitionRef.current = recognition;
     }
 
-    if (isListening) {
-      return;
-    }
+    if (isListening) return;
+
+    baseAnswerRef.current = answer.trim();
+    finalTranscriptRef.current = "";
 
     try {
       recognitionRef.current.start();
-    } catch (error) {
-      console.warn("⚠️ No se pudo iniciar el reconocimiento:", error);
+    } catch {
       setVoiceError(
         "No se pudo iniciar el reconocimiento de voz. Intenta nuevamente."
       );
       setIsListening(false);
     }
   };
+
+  const handleMicClick = () => {
+    if (isListening) {
+      stopListening();
+      return;
+    }
+
+    startListening();
+  };
+
+  useEffect(() => {
+    return () => {
+      clearSilenceTimer();
+
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, []);
 
   return (
     <ScreenLayout className="justify-start md:justify-center">
@@ -194,7 +288,10 @@ export default function QuestionScreen({
 
         <div className="flex flex-col gap-5 md:grid md:grid-cols-[1.1fr_0.9fr] md:items-start md:gap-12">
           <div className="flex w-full flex-col md:pt-2">
-            <motion.div variants={itemVariants} className="w-full text-center md:text-left">
+            <motion.div
+              variants={itemVariants}
+              className="w-full text-center md:text-left"
+            >
               <h1 className="mx-auto max-w-[300px] text-[20px] font-light leading-[1.08] tracking-tight text-white sm:max-w-[340px] sm:text-[24px] md:mx-0 md:max-w-[520px] md:text-[59px]">
                 {question.prompt}
               </h1>
@@ -217,7 +314,10 @@ export default function QuestionScreen({
                 />
               </div>
 
-              <motion.div variants={itemVariants} className="w-full max-w-[320px]">
+              <motion.div
+                variants={itemVariants}
+                className="w-full max-w-[320px]"
+              >
                 <div className="relative">
                   <textarea
                     value={answer}
@@ -245,16 +345,19 @@ export default function QuestionScreen({
 
                   <button
                     type="button"
-                    aria-label="Activar micrófono"
-                    onClick={startListening}
+                    aria-label={
+                      isListening ? "Detener micrófono" : "Activar micrófono"
+                    }
+                    onClick={handleMicClick}
                     className={`
-                      absolute bottom-4 right-4 z-10
-                      flex items-center justify-center
-                      text-white transition-all duration-200
-                      touch-manipulation
-                      ${isListening
-                        ? "scale-110 opacity-100"
-                        : "opacity-80 hover:opacity-100"}
+                      absolute bottom-3 right-3 z-10
+                      flex h-11 w-11 items-center justify-center rounded-full
+                      border transition-all duration-300 touch-manipulation
+                      ${
+                        isListening
+                          ? "scale-110 border-red-400/80 bg-red-500 shadow-[0_0_24px_rgba(239,68,68,0.45)] animate-pulse"
+                          : "border-white/10 bg-white/5 opacity-90 hover:opacity-100"
+                      }
                     `}
                   >
                     <Image
@@ -268,11 +371,19 @@ export default function QuestionScreen({
                   </button>
                 </div>
 
-                {voiceError && (
-                  <p className="mt-2 text-sm leading-[1.4] text-[#fca5a5]">
-                    {voiceError}
-                  </p>
-                )}
+                <div className="mt-2 min-h-[24px]">
+                  {isListening && (
+                    <p className="text-sm font-medium text-red-300">
+                      🔴 Escuchando... deja de hablar y en 3 segundos se cerrará.
+                    </p>
+                  )}
+
+                  {!isListening && voiceError && (
+                    <p className="text-sm leading-[1.4] text-[#fca5a5]">
+                      {voiceError}
+                    </p>
+                  )}
+                </div>
 
                 <div className="mt-4 flex justify-center">
                   <PrimaryButton
@@ -314,16 +425,19 @@ export default function QuestionScreen({
 
                 <button
                   type="button"
-                  aria-label="Activar micrófono"
-                  onClick={startListening}
+                  aria-label={
+                    isListening ? "Detener micrófono" : "Activar micrófono"
+                  }
+                  onClick={handleMicClick}
                   className={`
                     absolute bottom-4 right-4 z-10
-                    flex items-center justify-center
-                    text-white transition-all duration-200
-                    touch-manipulation
-                    ${isListening
-                      ? "scale-110 opacity-100"
-                      : "opacity-80 hover:opacity-100"}
+                    flex h-14 w-14 items-center justify-center rounded-full
+                    border transition-all duration-300 touch-manipulation
+                    ${
+                      isListening
+                        ? "scale-110 border-red-400/80 bg-red-500 shadow-[0_0_28px_rgba(239,68,68,0.45)] animate-pulse"
+                        : "border-white/10 bg-white/5 opacity-90 hover:opacity-100"
+                    }
                   `}
                 >
                   <Image
@@ -337,11 +451,19 @@ export default function QuestionScreen({
                 </button>
               </div>
 
-              {voiceError && (
-                <p className="mt-3 text-sm leading-[1.4] text-[#fca5a5]">
-                  {voiceError}
-                </p>
-              )}
+              <div className="mt-3 min-h-[24px]">
+                {isListening && (
+                  <p className="text-sm font-medium text-red-300">
+                    🔴 Escuchando... deja de hablar y en 3 segundos se cerrará.
+                  </p>
+                )}
+
+                {!isListening && voiceError && (
+                  <p className="text-sm leading-[1.4] text-[#fca5a5]">
+                    {voiceError}
+                  </p>
+                )}
+              </div>
             </motion.div>
           </div>
 
